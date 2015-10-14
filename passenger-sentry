@@ -1,0 +1,92 @@
+#!/usr/bin/env python
+#
+# Author : Romain Fihue <romain.fihue@gmail.com>
+# Usage :
+#  ./passenger_sentry
+#  This will watch for IN_MODIFY, IN_CLOSE_WRITE and IN_MOVE events in every .pp file
+#  in /etc/puppet/environments and executes "touch /usr/share/puppet/rack/puppetmasterd/tmp/restart.txt"
+#
+#  ./passenger_sentry --path /path/to/watch/recursively --ext erb --event IN_CLOSE_NOWRITE --cmd "echo blah"
+#  This will watch for IN_MODIFY, IN_CLOSE_WRITE, IN_MOVE and IN_CLOSE_NOWRITE events
+#  in every .pp and .erb file in /path/to/watch/recursively
+#  and executes "echo blah"
+#
+import subprocess
+import sys
+import pyinotify
+import argparse
+import shlex
+
+class OnWriteHandler(pyinotify.ProcessEvent):
+    def my_init(self, cwd, extensions, cmd, events):
+        self.cwd = cwd
+        self.extensions = extensions
+        self.cmd = shlex.split(cmd)
+        self.create_watchers(events)
+        self.events = events
+        print "==> Setting up watchers on {events}".format(events=self.events)
+
+    def watcher(self, event):
+        if all(not event.pathname.endswith(ext) for ext in self.extensions):
+            return
+        self._run_cmd(event)
+
+    def create_watchers(self, events):
+        for watched_event in events:
+            setattr(self, "process_{}".format(watched_event), self.watcher)
+
+    def _run_cmd(self, event):
+        print '==> Event detected on {file} : {event}'.format(file=event.pathname, event=event.maskname)
+        print 'Launching {cmd} ...'.format(cmd=" ".join(self.cmd)),
+        return_code = subprocess.call(self.cmd)
+        if return_code != 0:
+            print "Failed ({})".format(return_code)
+        else:
+            print "Ok"
+
+    def process_default(self, event):
+        pass
+
+def auto_compile(path, extensions, cmd, events):
+    wm = pyinotify.WatchManager()
+    handler = OnWriteHandler(cwd=path, extensions=extensions, cmd=cmd, events=events)
+    notifier = pyinotify.Notifier(wm, default_proc_fun=handler)
+    wm.add_watch(path, pyinotify.ALL_EVENTS, rec=True, auto_add=True)
+    print '==> Start monitoring %s (type c^c to exit)' % path
+    notifier.loop()
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Watch Puppet dir'\
+                                     ' to auto-restart Passenger when changes happens')
+    parser.add_argument('--path',
+                        dest="path",
+                        metavar='PATH',
+                        type=str,
+                        help='Path to watch recursively',
+                        default="/etc/puppet/environments")
+    parser.add_argument('--event','-E',
+                        dest='events',
+                        action='append',
+                        type=str,
+                        default=["IN_MODIFY", "IN_CLOSE_WRITE", "IN_MOVE"],
+                        help='Inotify events to watch')
+    parser.add_argument('--ext','-e',
+                        dest='extensions',
+                        action='append',
+                        type=str,
+                        default=["pp"],
+                        help="File's extesions to watch")
+    parser.add_argument('--cmd','-c',
+                        dest='cmd',
+                        action='store',
+                        type=str,
+                        default="touch /usr/share/puppet/rack/puppetmasterd/tmp/restart.txt",
+                        help='Shell command to launch when events happened')
+
+    args = parser.parse_args()
+
+    extensions = list(set(args.extensions))
+    events = list(set(args.events))
+
+    # Blocks
+    auto_compile(args.path, extensions, args.cmd, events)

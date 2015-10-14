@@ -1,0 +1,10 @@
+[Unit]
+Description=Passenger Sentry
+
+[Service]
+Type=simple
+Environment="PYTHONUNBUFFERED=yes"
+ExecStart=/opt/passenger-sentry/passenger-sentry --cmd "echo blah"
+
+[Install]
+WantedBy=multi-user.target
